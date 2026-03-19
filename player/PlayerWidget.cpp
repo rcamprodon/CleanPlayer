@@ -101,12 +101,15 @@ PlayerWidget::PlayerWidget(IPlayerBackend *backend, QWidget *parent)
   m_fpsLabel = new QLabel("fps: -", this);
   m_dropsLabel = new QLabel("drops: -", this);
   m_timeLabel = new QLabel("00:00:00", this);
+  m_statusLabel = new QLabel("STOP", this);
   row4->addWidget(new QLabel("Subs:", this));
   row4->addWidget(m_subtitlesCombo);
   row4->addSpacing(10);
   row4->addWidget(m_fpsLabel);
   row4->addWidget(m_dropsLabel);
   row4->addWidget(m_timeLabel);
+  row4->addSpacing(10);
+  row4->addWidget(m_statusLabel);
   row4->addStretch(1);
   root->addLayout(row4);
 
@@ -163,6 +166,44 @@ PlayerWidget::PlayerWidget(IPlayerBackend *backend, QWidget *parent)
           [this](int drops, int displayed) {
             m_dropsLabel->setText(
                 QString("drops: %1/%2").arg(drops).arg(displayed));
+          });
+
+  connect(m_backend, &IPlayerBackend::playbackStateChanged, this,
+          [this](IPlayerBackend::PlaybackState state) {
+            switch (state) {
+            case IPlayerBackend::PlaybackState::Playing:
+              m_statusLabel->setText("PLAY");
+              break;
+            case IPlayerBackend::PlaybackState::Paused:
+              m_statusLabel->setText("PAUSE");
+              break;
+            case IPlayerBackend::PlaybackState::Stopped:
+              m_statusLabel->setText("STOP");
+              break;
+            default:
+              m_statusLabel->setText("UNKNOWN");
+              break;
+            }
+          });
+
+  connect(m_backend, &IPlayerBackend::statusChanged, this,
+          [this](IPlayerBackend::Status status) {
+            switch (status) {
+            case IPlayerBackend::Status::Ended:
+              m_statusLabel->setText("ENDED");
+              break;
+            case IPlayerBackend::Status::Error:
+              m_statusLabel->setText("ERROR");
+              break;
+            case IPlayerBackend::Status::Loading:
+              m_statusLabel->setText("LOADING");
+              break;
+            case IPlayerBackend::Status::Buffering:
+              m_statusLabel->setText("BUFFERING");
+              break;
+            default:
+              break;
+            }
           });
 
   // Screen combo

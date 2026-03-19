@@ -53,6 +53,7 @@ private:
     QLabel *m_dropsLabel = nullptr;
 
     QLabel *m_timeLabel = nullptr;
+    QLabel *m_statusLabel = nullptr;
 
     QListWidget *m_playlistView = nullptr;
     QComboBox *m_outputScreenCombo = nullptr;
