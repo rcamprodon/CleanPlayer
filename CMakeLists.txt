@@ -10,7 +10,7 @@ set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
 # ---- Qt ----
-find_package(Qt6 REQUIRED COMPONENTS Widgets Gui Multimedia MultimediaWidgets)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Gui)
 
 # ---- App target ----
 add_executable(CleanPlayer
@@ -20,40 +20,25 @@ add_executable(CleanPlayer
   player/PlayerWidget.h
   player/PlayerWidget.cpp
 
-  # Always available (Qt-only) backend
-  player/QtMediaBackend.h
-  player/QtMediaBackend.cpp
+  player/VlcBackend.h
+  player/VlcBackend.cpp
 )
 
 target_link_libraries(CleanPlayer PRIVATE
   Qt6::Widgets
   Qt6::Gui
-  Qt6::Multimedia
-  Qt6::MultimediaWidgets
 )
 
 # ---- Threads (Linux nicety) ----
 find_package(Threads REQUIRED)
 target_link_libraries(CleanPlayer PRIVATE Threads::Threads)
 
-# ---- Optional VLC backend (auto-detect) ----
-find_package(PkgConfig QUIET)
-if (PkgConfig_FOUND)
-  pkg_check_modules(VLC QUIET IMPORTED_TARGET libvlc)
-endif()
+# ---- VLC backend (required) ----
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(VLC REQUIRED IMPORTED_TARGET libvlc)
 
-if (TARGET PkgConfig::VLC)
-  message(STATUS "libVLC found: building VLC backend")
-  target_sources(CleanPlayer PRIVATE
-    player/VlcBackend.h
-    player/VlcBackend.cpp
-  )
-  target_link_libraries(CleanPlayer PRIVATE PkgConfig::VLC)
-  target_compile_definitions(CleanPlayer PRIVATE HAVE_VLC=1)
-else()
-  message(STATUS "libVLC NOT found: VLC backend will NOT be built (CLI --vlc should be handled gracefully)")
-  target_compile_definitions(CleanPlayer PRIVATE HAVE_VLC=0)
-endif()
+message(STATUS "libVLC found: building VLC backend")
+target_link_libraries(CleanPlayer PRIVATE PkgConfig::VLC)
 
 # ---- Windows macro hygiene (kept from your original) ----
 if (WIN32)
