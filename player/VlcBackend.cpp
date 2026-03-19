@@ -701,12 +701,7 @@ void VlcBackend::handleVlcEvent(const libvlc_event_t *ev, void *ud) {
 
         case libvlc_MediaPlayerEndReached:
           emit self->statusChanged(Status::Ended);
-          if (self->m_loop) {
-            self->setPositionMs(0);
-            self->play();
-          } else {
-            self->next();
-          }
+          self->next();
           break;
 
         case libvlc_MediaPlayerEncounteredError:

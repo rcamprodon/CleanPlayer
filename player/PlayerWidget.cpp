@@ -346,5 +346,8 @@ void PlayerWidget::refreshSubtitlesUI() {
 }
 
 void PlayerWidget::updateTimeLabel(qint64 posMs) {
-  m_timeLabel->setText(formatHHMMSS(posMs));
+  if (m_lastDurationMs > 0)
+    m_timeLabel->setText(formatHHMMSS(posMs) + " / " + formatHHMMSS(m_lastDurationMs));
+  else
+    m_timeLabel->setText(formatHHMMSS(posMs));
 }
