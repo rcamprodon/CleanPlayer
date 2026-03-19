@@ -4,6 +4,7 @@
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QScreen>
+#include <QThread>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -11,6 +12,9 @@
 #include <vlc/vlc.h>
 
 #include <algorithm>
+
+static constexpr double MIN_VALID_FPS = 1.0;
+static constexpr double MAX_VALID_FPS = 240.0;
 
 static int clampInt(int v, int lo, int hi) {
   return (v < lo) ? lo : (v > hi) ? hi : v;
@@ -140,6 +144,15 @@ void VlcBackend::addToPlaylist(const QUrl &url) {
   it.displayName = url.isLocalFile() ? QFileInfo(url.toLocalFile()).fileName()
                                      : url.toString();
 
+  if (url.isLocalFile() && m_vlc) {
+    libvlc_media_t *m =
+        libvlc_media_new_path(m_vlc, url.toLocalFile().toUtf8().constData());
+    if (m) {
+      parseMedia(m, it);
+      libvlc_media_release(m);
+    }
+  }
+
   m_playlist.append(it);
 
   SubtitleCache sc;
@@ -254,11 +267,49 @@ void VlcBackend::setSourceFromCurrentIndex(bool autoplay) {
   }
 
   libvlc_media_player_set_media(m_mp, m);
+  libvlc_media_release(m);
 
-  libvlc_media_parse_with_options(m, libvlc_media_parse_local, -1);
+  // Emit metadata from the pre-parsed PlaylistItem (populated in addToPlaylist)
+  const PlaylistItem &item = m_playlist[m_currentIndex];
+  if (item.fps > MIN_VALID_FPS && item.fps < MAX_VALID_FPS)
+    emit fpsDetected(item.fps, "libVLC track parse (libvlc_media_tracks_get)");
+  if (item.durationMs > 0)
+    emit durationChanged(item.durationMs);
+
+  if (autoplay)
+    libvlc_media_player_play(m_mp);
+}
+
+bool VlcBackend::parseMedia(libvlc_media_t *media, PlaylistItem &item) {
+  if (!media)
+    return false;
+
+  const int TIMEOUT_MS = 500;
+  const int POLL_MS = 10;
+
+  libvlc_media_parse_with_options(media, libvlc_media_parse_local, TIMEOUT_MS);
+
+  // Wait until parsing finishes or the timeout is reached
+  int elapsed = 0;
+  while (libvlc_media_get_parsed_status(media) !=
+             libvlc_media_parsed_status_done &&
+         elapsed < TIMEOUT_MS) {
+    QThread::msleep(POLL_MS);
+    elapsed += POLL_MS;
+  }
+
+  const bool parsedOk = (libvlc_media_get_parsed_status(media) ==
+                         libvlc_media_parsed_status_done);
+  if (!parsedOk) {
+    qDebug() << "[VlcBackend] parseMedia: timeout after" << elapsed
+             << "ms for" << item.url.toString();
+    return false;
+  }
+
+  qDebug() << "[VlcBackend] parseMedia: done after" << elapsed << "ms";
 
   libvlc_media_track_t **tracks = nullptr;
-  const int tcount = libvlc_media_tracks_get(m, &tracks);
+  const int tcount = libvlc_media_tracks_get(media, &tracks);
 
   double fps = 0.0;
   int w = 0, h = 0;
@@ -269,9 +320,8 @@ void VlcBackend::setSourceFromCurrentIndex(bool autoplay) {
       const auto *v = tracks[i]->video;
       w = int(v->i_width);
       h = int(v->i_height);
-      if (v->i_frame_rate_den != 0) {
+      if (v->i_frame_rate_den != 0)
         fps = double(v->i_frame_rate_num) / double(v->i_frame_rate_den);
-      }
       double sar = 1.0;
       if (v->i_sar_den > 0)
         sar = double(v->i_sar_num) / double(v->i_sar_den);
@@ -283,24 +333,12 @@ void VlcBackend::setSourceFromCurrentIndex(bool autoplay) {
   if (tracks)
     libvlc_media_tracks_release(tracks, tcount);
 
-  const qint64 dur = libvlc_media_get_duration(m);
-
-  if (m_currentIndex >= 0 && m_currentIndex < m_playlist.size()) {
-    m_playlist[m_currentIndex].durationMs = dur;
-    m_playlist[m_currentIndex].fps = fps;
-    m_playlist[m_currentIndex].width = w;
-    m_playlist[m_currentIndex].height = h;
-    m_playlist[m_currentIndex].aspectRatio = ar;
-    emit playlistChanged();
-
-    if (fps > 1.0 && fps < 240.0)
-      emit fpsDetected(fps, "libVLC track parse (libvlc_media_tracks_get)");
-  }
-
-  libvlc_media_release(m);
-
-  if (autoplay)
-    libvlc_media_player_play(m_mp);
+  item.durationMs  = libvlc_media_get_duration(media);
+  item.fps         = fps;
+  item.width       = w;
+  item.height      = h;
+  item.aspectRatio = ar;
+  return true;
 }
 
 void VlcBackend::play() {

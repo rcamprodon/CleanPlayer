@@ -67,6 +67,7 @@ private:
 
     void bindVlcToWidget(QWidget *w);
     void setSourceFromCurrentIndex(bool autoplay);
+    bool parseMedia(libvlc_media_t *media, PlaylistItem &item);
 
     void installVlcEvents();
     void emitStateFromVlcState();
