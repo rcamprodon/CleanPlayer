@@ -363,7 +363,13 @@ void VlcBackend::next() {
       return;
     next = 0;
   }
-  setCurrentIndex(next);
+  if (next == m_currentIndex) {
+    // Single-item playlist with loop: setCurrentIndex would bail out (same
+    // index), so reload the source explicitly so VLC resets to the beginning.
+    setSourceFromCurrentIndex(false);
+  } else {
+    setCurrentIndex(next);
+  }
   play();
 }
 
