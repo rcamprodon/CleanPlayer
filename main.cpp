@@ -5,13 +5,19 @@
 
 int main(int argc, char *argv[]) {
   QApplication app(argc, argv);
-
-  IPlayerBackend *backend = new VlcBackend();
   app.setApplicationDisplayName("CleanPlayer");
 
-  PlayerWidget w(backend);
-  w.resize(660, 850);
-  w.show();
-
-  return app.exec();
+  // backend must outlive the widget; use a block so the PlayerWidget (and its
+  // render widget) is fully destroyed before we delete the backend, ensuring
+  // VLC is detached from the native window before cleanup.
+  auto *backend = new VlcBackend();
+  int result = 0;
+  {
+    PlayerWidget w(backend);
+    w.resize(660, 850);
+    w.show();
+    result = app.exec();
+  }
+  delete backend;
+  return result;
 }

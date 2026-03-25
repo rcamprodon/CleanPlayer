@@ -76,7 +76,6 @@ PlayerWidget::PlayerWidget(IPlayerBackend *backend, QWidget *parent)
   row2->addWidget(m_pauseBtn);
   row2->addWidget(m_stopBtn);
   row2->addWidget(m_nextBtn);
-  row2->addWidget(m_loopCheck);
   row2->addStretch(1);
   root->addLayout(row2);
 
