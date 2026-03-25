@@ -53,6 +53,11 @@ VlcBackend::~VlcBackend() {
   m_pollTimer.stop();
   m_statsTimer.stop();
 
+  // Disconnect the destroyed guard before we tear down VLC so the lambda
+  // cannot fire against a partially-destructed object.
+  if (m_renderWidget)
+    disconnect(m_renderWidget, &QObject::destroyed, this, nullptr);
+
   if (m_mp) {
     libvlc_media_player_stop(m_mp);
 
@@ -77,6 +82,9 @@ VlcBackend::~VlcBackend() {
     m_externalWindow->close();
     delete m_externalWindow;
     m_externalWindow = nullptr;
+    // m_renderWidget may have been a child of m_externalWindow and deleted
+    // with it; null the pointer so nothing else can dereference it.
+    m_renderWidget = nullptr;
   }
 }
 
@@ -88,6 +96,22 @@ void VlcBackend::setVideoContainer(QWidget *container) {
     m_renderWidget->setAttribute(Qt::WA_NativeWindow);
     m_renderWidget->setAttribute(Qt::WA_DontCreateNativeAncestors);
     m_renderWidget->setStyleSheet("background:black;");
+
+    // If the container (or its hierarchy) is destroyed before VlcBackend,
+    // detach VLC from the native window handle so it stops rendering to a
+    // freed resource.
+    connect(m_renderWidget, &QObject::destroyed, this, [this] {
+      if (m_mp) {
+#ifdef Q_OS_WIN
+        libvlc_media_player_set_hwnd(m_mp, nullptr);
+#elif defined(Q_OS_MAC)
+        libvlc_media_player_set_nsobject(m_mp, nullptr);
+#else
+        libvlc_media_player_set_xwindow(m_mp, 0);
+#endif
+      }
+      m_renderWidget = nullptr;
+    });
 
     if (container->layout())
       container->layout()->addWidget(m_renderWidget);
@@ -145,8 +169,8 @@ void VlcBackend::addToPlaylist(const QUrl &url) {
                                      : url.toString();
 
   if (url.isLocalFile() && m_vlc) {
-    libvlc_media_t *m =
-        libvlc_media_new_path(m_vlc, url.toLocalFile().toUtf8().constData());
+    const QByteArray localPath = url.toLocalFile().toUtf8();
+    libvlc_media_t *m = libvlc_media_new_path(m_vlc, localPath.constData());
     if (m) {
       parseMedia(m, it);
       libvlc_media_release(m);
@@ -253,14 +277,17 @@ void VlcBackend::setSourceFromCurrentIndex(bool autoplay) {
     return;
 
   const QUrl url = m_playlist[m_currentIndex].url;
-  if (!url.isLocalFile()) {
-    emit errorOccurred(
-        "VlcBackend currently expects local files (QUrl::fromLocalFile).");
-    return;
+
+  libvlc_media_t *m = nullptr;
+  if (url.isLocalFile()) {
+    const QByteArray localPath = url.toLocalFile().toUtf8();
+    m = libvlc_media_new_path(m_vlc, localPath.constData());
+  } else {
+    // Remote URL (HTTP, RTSP, etc.): use the full URI form.
+    const QByteArray uri = url.toString().toUtf8();
+    m = libvlc_media_new_location(m_vlc, uri.constData());
   }
 
-  const QString path = url.toLocalFile();
-  libvlc_media_t *m = libvlc_media_new_path(m_vlc, path.toUtf8().constData());
   if (!m) {
     emit errorOccurred("Failed to create VLC media.");
     return;
@@ -284,21 +311,20 @@ bool VlcBackend::parseMedia(libvlc_media_t *media, PlaylistItem &item) {
   if (!media)
     return false;
 
-  const int TIMEOUT = 1000;
+  const int MAX_PARSE_ITERATIONS = 1000; // 1000 × 10 ms = 10 s max
   const int POLL_MS = 10;
 
   libvlc_media_parse_with_options(media, libvlc_media_parse_local, -1);
 
-  // Wait until parsing finishes or the timeout is reached TIMEOUT*POLL_MS ms
-  // later. libvlc_media_get_parsed_status will return "done" when parsing
-  // finishes, but it may also return "skipped" or "timeout" if parsing fails or
-  // takes too long. In those cases we should bail out and not try to query
-  // tracks/duration etc since they won't be available.
+  // Wait until parsing finishes or the timeout is reached (up to
+  // MAX_PARSE_ITERATIONS * POLL_MS ms). libvlc_media_get_parsed_status returns
+  // "done" when parsing finishes, or "skipped"/"timeout" if it fails or takes
+  // too long — in those cases bail out since track info won't be available.
 
   int elapsed = 0;
   while (libvlc_media_get_parsed_status(media) !=
              libvlc_media_parsed_status_done &&
-         elapsed < TIMEOUT) {
+         elapsed < MAX_PARSE_ITERATIONS) {
     QThread::msleep(POLL_MS);
     elapsed++;
   }
@@ -499,18 +525,13 @@ void VlcBackend::setOutputScreen(int screenIndex) {
   if (screenIndex == 0) {
     m_outputScreen = 0;
 
-    if (m_externalWindow) {
-      m_renderWidget->setParent(m_container);
-      if (m_container->layout())
-        m_container->layout()->addWidget(m_renderWidget);
-      m_renderWidget->show();
+    m_renderWidget->setParent(m_container);
+    if (m_container->layout())
+      m_container->layout()->addWidget(m_renderWidget);
+    m_renderWidget->show();
+
+    if (m_externalWindow)
       m_externalWindow->hide();
-    } else {
-      m_renderWidget->setParent(m_container);
-      if (m_container->layout())
-        m_container->layout()->addWidget(m_renderWidget);
-      m_renderWidget->show();
-    }
 
     bindVlcToWidget(m_renderWidget);
     emit outputScreenChanged(m_outputScreen);
@@ -688,15 +709,12 @@ void VlcBackend::pollStats() {
   const int lost = int(st.i_lost_pictures);
   const int displayed = int(st.i_displayed_pictures);
 
-  emit framesDropped(lost, displayed);
-
-  if (m_lastLostPictures < 0)
+  // Only emit when values change to avoid unnecessary signal noise.
+  if (lost != m_lastLostPictures || displayed != m_lastDisplayedPictures) {
     m_lastLostPictures = lost;
-  if (m_lastDisplayedPictures < 0)
     m_lastDisplayedPictures = displayed;
-
-  m_lastLostPictures = lost;
-  m_lastDisplayedPictures = displayed;
+    emit framesDropped(lost, displayed);
+  }
 }
 
 // ---- VLC events ----
